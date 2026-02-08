@@ -8,14 +8,9 @@ app.use(cors());
 app.use(express.json());
 
 // 🔐 [SECURITY] Supabase 설정
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!supabaseUrl || !supabaseKey) {
-    console.warn("⚠️ Warning: Supabase credentials missing. Using placeholder.");
-}
-
-const sbAdmin = createClient(supabaseUrl || 'https://placeholder.supabase.co', supabaseKey || 'placeholder');
+const supabaseUrl = process.env.SUPABASE_URL || 'https://placeholder.supabase.co';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder';
+const sbAdmin = createClient(supabaseUrl, supabaseKey);
 
 // ==========================================================================
 // 1. DATA_SHEET (조경 전문 데이터셋 - Full Data)
@@ -151,8 +146,6 @@ const DATA_SHEET = {
 // ==========================================================================
 // 2. THEME PRESETS (15 Distinct Themes)
 // ==========================================================================
-// Common Tech Specs Helper
-// 💎 [변경됨] 모든 프리셋에 공통으로 적용될 새로운 Tech Specs 정의
 const C = {
     s14: "Hyper-realistic Photo (극사실 사진)",
     s15: "Unreal Engine 5.5",
@@ -190,7 +183,7 @@ const THEME_PRESETS = {
 };
 
 // ==========================================================================
-// 3. API ROUTES (Shared Credits Logic)
+// 3. API ROUTES
 // ==========================================================================
 
 app.get('/api/data', (req, res) => {
@@ -207,44 +200,68 @@ app.get('/api/preset/:themeKey', (req, res) => {
     }
 });
 
-// 💳 [LINKED] 크레딧 충전 (Architect Pro와 동일한 테이블 사용)
+// 💳 [결제 시스템] 크레딧 충전 및 유효기간 연장 (NEW)
 app.post('/api/charge-success', async (req, res) => {
-    const { userId, amount } = req.body;
+    const { userId, amount, creditsToAdd, daysToAdd } = req.body;
     
     if (!userId || !amount) {
         return res.status(400).json({ error: "Missing fields" });
     }
 
     try {
-        // 기존 프로필 확인
-        const { data: profile } = await sbAdmin.from('profiles').select('credits').eq('id', userId).single();
-        let currentCredits = 0;
+        const { data: profile, error: fetchError } = await sbAdmin
+            .from('profiles')
+            .select('credits, valid_until')
+            .eq('id', userId)
+            .single();
         
-        if (profile) {
-            currentCredits = profile.credits;
-        } else {
-            // 프로필 없으면 생성
+        // 프로필이 없으면 생성
+        if (fetchError || !profile) {
             const { error: insertError } = await sbAdmin.from('profiles').upsert([{ id: userId, credits: 0 }]);
             if(insertError) throw insertError;
         }
+
+        const currentCredits = profile ? profile.credits : 0;
+        const currentExpiry = profile ? profile.valid_until : null;
         
         // 크레딧 추가
-        const addCredits = Math.floor(amount / 20); // 3000원 -> 150크레딧
+        const addCredits = creditsToAdd ? parseInt(creditsToAdd) : Math.floor(amount / 30);
         const newCredits = currentCredits + addCredits;
 
+        // 유효기간 연장
+        const addedDays = daysToAdd ? parseInt(daysToAdd) : 30; 
+        let newExpiryDate = new Date();
+
+        if (currentExpiry) {
+            const currentExpiryDate = new Date(currentExpiry);
+            // 만료일이 아직 남았다면 거기서 연장, 지났다면 오늘부터 연장
+            if (currentExpiryDate > new Date()) {
+                newExpiryDate = currentExpiryDate;
+            }
+        }
+        newExpiryDate.setDate(newExpiryDate.getDate() + addedDays);
+
         // DB 업데이트
-        const { error: updateError } = await sbAdmin.from('profiles').update({ credits: newCredits }).eq('id', userId);
+        const { error: updateError } = await sbAdmin
+            .from('profiles')
+            .update({ 
+                credits: newCredits, 
+                valid_until: newExpiryDate.toISOString() 
+            })
+            .eq('id', userId);
+
         if (updateError) throw updateError;
         
-        console.log(`✅ Shared Credit Charged: User ${userId} -> ${newCredits}`);
-        res.json({ success: true, newCredits });
+        console.log(`✅ [Charge] User ${userId}: +${addCredits} Cr, +${addedDays} Days`);
+        res.json({ success: true, newCredits, newExpiry: newExpiryDate });
+
     } catch (err) {
         console.error("Charge Error:", err);
         res.status(500).json({ error: "Charge failed" });
     }
 });
 
-// 🌳 [ENGINE] 조경 프롬프트 생성 및 크레딧 차감
+// 🌳 [ENGINE] 조경 프롬프트 생성 (유효기간 체크 포함)
 app.post('/api/generate', async (req, res) => {
     const { choices, themeBoost, userId } = req.body;
     
@@ -255,27 +272,42 @@ app.post('/api/generate', async (req, res) => {
     }
 
     try {
-        // 2. [LINKED] 크레딧 조회 (Architect Pro와 공유)
-        const { data: userProfile, error: fetchError } = await sbAdmin.from('profiles').select('credits').eq('id', userId).single();
+        // 2. 회원 처리 (DB 조회)
+        const { data: userProfile, error: fetchError } = await sbAdmin
+            .from('profiles')
+            .select('credits, valid_until')
+            .eq('id', userId)
+            .single();
         
         if (fetchError || !userProfile) {
              return res.status(404).json({ error: "User profile not found." });
         }
+
+        // [New] 유효기간 체크
+        if (userProfile.valid_until) {
+            const expiryDate = new Date(userProfile.valid_until);
+            if (expiryDate < new Date()) {
+                return res.status(403).json({ error: "멤버십이 만료되었습니다. 연장 후 이용해주세요!" });
+            }
+        }
         
         if (userProfile.credits < 1) {
-            return res.status(403).json({ error: "크레딧이 부족합니다. (Architect Pro와 통합)" });
+            return res.status(403).json({ error: "크레딧이 부족합니다. 충전 후 이용해주세요!" });
         }
 
         // 3. 프롬프트 생성
         const prompt = generateLandscapePrompt(choices, themeBoost);
 
-        // 4. [LINKED] 크레딧 차감
+        // 4. 크레딧 차감
         const newCreditBalance = userProfile.credits - 1;
-        const { error: updateError } = await sbAdmin.from('profiles').update({ credits: newCreditBalance }).eq('id', userId);
+        const { error: updateError } = await sbAdmin
+            .from('profiles')
+            .update({ credits: newCreditBalance })
+            .eq('id', userId);
         
         if (updateError) throw updateError;
 
-        console.log(`✂️ Shared Credit Used: User ${userId} (${newCreditBalance})`);
+        console.log(`✂️ Generated: User ${userId} (${newCreditBalance})`);
         res.json({ result: prompt, remainingCredits: newCreditBalance });
 
     } catch (err) {
@@ -284,7 +316,7 @@ app.post('/api/generate', async (req, res) => {
     }
 });
 
-// Prompt Logic
+// Prompt Logic (Helper)
 function generateLandscapePrompt(choices, themeBoost) {
     const getV = (k) => choices[k] ? choices[k].replace(/\([^)]*\)/g, "").trim() : "";
 
@@ -321,5 +353,5 @@ function generateLandscapePrompt(choices, themeBoost) {
 }
 
 app.listen(port, () => {
-    console.log(`🚀 MY LANDSCAPE PRO V2.0 Running on port ${port}`);
-});
+    console.log(`🚀 MY LANDSCAPE PRO Server running on port ${port}`);
+});S
