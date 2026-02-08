@@ -152,9 +152,14 @@ const DATA_SHEET = {
 // 2. THEME PRESETS (15 Distinct Themes)
 // ==========================================================================
 // Common Tech Specs Helper
-const C = { 
-    s14: "Photorealistic", s15: "Lumion 2024", s16: "Eye-level", 
-    s22: "24mm Wide", s18: "--ar 16:9", s10: "Clear Sky" 
+// 💎 [변경됨] 모든 프리셋에 공통으로 적용될 새로운 Tech Specs 정의
+const C = {
+    s14: "Hyper-realistic Photo (극사실 사진)",
+    s15: "Unreal Engine 5.5",
+    s16: "Eye-level (눈높이)",
+    s22: "35mm Lens (표준 광각)",
+    s26: "Still Life (정적인)",
+    s18: "--ar 1:1 (Square)"
 };
 
 const THEME_PRESETS = {
