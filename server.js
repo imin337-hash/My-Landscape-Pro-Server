@@ -354,4 +354,4 @@ function generateLandscapePrompt(choices, themeBoost) {
 
 app.listen(port, () => {
     console.log(`🚀 MY LANDSCAPE PRO Server running on port ${port}`);
-});S
+});
