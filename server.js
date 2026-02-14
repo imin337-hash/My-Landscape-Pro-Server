@@ -4,13 +4,19 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 const port = process.env.PORT || 3000;
 
+// [CORS 허용] 워드프레스 등 외부 접속 허용
 app.use(cors());
 app.use(express.json());
 
 // 🔐 [SECURITY] Supabase 설정
-const supabaseUrl = process.env.SUPABASE_URL || 'https://placeholder.supabase.co';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder';
-const sbAdmin = createClient(supabaseUrl, supabaseKey);
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+    console.warn("⚠️ Warning: Supabase credentials missing. Using placeholder.");
+}
+
+const sbAdmin = createClient(supabaseUrl || 'https://placeholder.supabase.co', supabaseKey || 'placeholder');
 
 // ==========================================================================
 // 1. DATA_SHEET (조경 전문 데이터셋 - Full Data)
@@ -200,7 +206,7 @@ app.get('/api/preset/:themeKey', (req, res) => {
     }
 });
 
-// 💳 [결제 시스템] 크레딧 충전 및 유효기간 연장 (NEW)
+// 💳 [결제 시스템] 크레딧 충전 및 유효기간 연장
 app.post('/api/charge-success', async (req, res) => {
     const { userId, amount, creditsToAdd, daysToAdd } = req.body;
     
@@ -283,7 +289,7 @@ app.post('/api/generate', async (req, res) => {
              return res.status(404).json({ error: "User profile not found." });
         }
 
-        // [New] 유효기간 체크
+        // 유효기간 체크
         if (userProfile.valid_until) {
             const expiryDate = new Date(userProfile.valid_until);
             if (expiryDate < new Date()) {
